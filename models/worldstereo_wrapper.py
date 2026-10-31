@@ -124,6 +124,8 @@ class WorldStereo:
         fsdp: bool = False,
         device_mesh=None,
         device: torch.device | None = None,
+        sequential_cpu_offload: bool = False,
+        vae_tiling: bool = False,
     ) -> "WorldStereo":
         """
         Build a WorldStereo instance from Hugging Face format
@@ -137,7 +139,13 @@ class WorldStereo:
             fsdp: Wrap models with PyTorch FSDP.  Requires ``device_mesh``.
             device_mesh: ``DeviceMesh`` with dims ``("rep", "shard")``.
             device: Target CUDA device.
+            sequential_cpu_offload: Keep components on CPU until Accelerate needs
+                them. This is incompatible with FSDP.
+            vae_tiling: Enable VAE tiling after constructing the pipeline.
         """
+        if sequential_cpu_offload and fsdp:
+            raise ValueError("sequential_cpu_offload cannot be combined with fsdp")
+
         if os.path.isdir(repo_id):
             json_cfg_path = os.path.join(repo_id, subfolder, "config.json")
             safetensors_path = os.path.join(repo_id, subfolder, "model.safetensors")
@@ -182,7 +190,12 @@ class WorldStereo:
         )
 
         text_encoder, image_clip, vae = cls._load_aux(
-            cfg, device=device, device_mesh=device_mesh, fsdp=fsdp, local_files_only=local_files_only
+            cfg,
+            device=device,
+            device_mesh=device_mesh,
+            fsdp=fsdp,
+            local_files_only=local_files_only,
+            keep_on_cpu=sequential_cpu_offload,
         )
         image_processor = CLIPImageProcessor.from_pretrained(
             cfg.base_model, do_rescale=False, subfolder="image_processor", local_files_only=local_files_only
@@ -201,6 +214,13 @@ class WorldStereo:
             device=device,
             local_files_only=local_files_only,
         )
+
+        if sequential_cpu_offload:
+            pipeline.enable_sequential_cpu_offload(gpu_id=device.index if device is not None else None)
+        if vae_tiling:
+            if not hasattr(pipeline.vae, "enable_tiling"):
+                raise RuntimeError("The loaded VAE does not support VAE tiling")
+            pipeline.enable_vae_tiling()
 
         rank0_log(f"WorldStereo ({model_type}) ready.")
         return cls(pipeline=pipeline, cfg=cfg)
@@ -341,7 +361,15 @@ class WorldStereo:
         return transformer.eval()
 
     @staticmethod
-    def _load_aux(cfg, *, device, device_mesh, fsdp: bool, local_files_only: bool = False):
+    def _load_aux(
+        cfg,
+        *,
+        device,
+        device_mesh,
+        fsdp: bool,
+        local_files_only: bool = False,
+        keep_on_cpu: bool = False,
+    ):
         import transformers as _tr
         from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 
@@ -353,7 +381,8 @@ class WorldStereo:
         if _tr.__version__ >= "5.0.0":
             rank0_log("Patching text_encoder.encoder.embed_tokens for transformers>=5.0.0", "WARNING")
             text_encoder.encoder.embed_tokens = text_encoder.shared
-        text_encoder = torch.compile(text_encoder)
+        if not keep_on_cpu:
+            text_encoder = torch.compile(text_encoder)
 
         # ---- image encoder ----
         rank0_log("Loading ImageEncoder (CLIP)…")
@@ -394,7 +423,8 @@ class WorldStereo:
         vae = AutoencoderKLWan.from_pretrained(
             cfg.base_model, subfolder="vae", torch_dtype=vae_dtype, local_files_only=local_files_only
         ).eval()
-        vae = torch.compile(vae)
+        if not keep_on_cpu:
+            vae = torch.compile(vae)
 
         if fsdp:
             fsdp_kwargs = dict(
@@ -416,11 +446,12 @@ class WorldStereo:
 
             gc.collect()
             torch.cuda.empty_cache()
-        else:
+        elif not keep_on_cpu:
             text_encoder = text_encoder.to(device=device)
             image_clip = image_clip.to(device=device)
 
-        vae = vae.to(device=device)
+        if not keep_on_cpu:
+            vae = vae.to(device=device)
         return text_encoder, image_clip, vae
 
     @staticmethod

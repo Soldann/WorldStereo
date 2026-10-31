@@ -22,6 +22,10 @@ if __name__ == '__main__':
     parser.add_argument("--output_path", type=str, default="outputs", help="Target path for output results")
     parser.add_argument("--local_files_only", action="store_true", help="If True, avoid downloading the file and return the path to the local cached file if it exists.")
     parser.add_argument("--fsdp", action="store_true", help="Enable FSDP model sharding")
+    parser.add_argument("--sequential_cpu_offload", action="store_true",
+                        help="Load pipeline components on demand to reduce GPU memory use")
+    parser.add_argument("--vae_tiling", action="store_true",
+                        help="Enable VAE tiling when supported by the loaded VAE")
     parser.add_argument("--seed", default=1024, type=int, help="Random seed")
     args = parser.parse_args()
 
@@ -67,7 +71,10 @@ if __name__ == '__main__':
         fsdp=args.fsdp,
         device_mesh=device_mesh,
         device=device,
+        sequential_cpu_offload=args.sequential_cpu_offload,
+        vae_tiling=args.vae_tiling,
     )
+
     # moge is used for warp rendering
     depth_model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl-normal").to(device).eval()
 
