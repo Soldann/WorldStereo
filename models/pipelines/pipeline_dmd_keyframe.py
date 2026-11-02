@@ -90,7 +90,7 @@ class RefKFDMDGeneratorPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             transformer: WorldStereoRefSModel,
             vae: AutoencoderKLWan,
             scheduler,
-            device,
+            device=None,
             vae_compile: bool = False,
             vae_compile_mode: str = "max-autotune"
     ):
@@ -116,6 +116,10 @@ class RefKFDMDGeneratorPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.vae_scale_factor_spatial = 2 ** len(self.vae.temperal_downsample) if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
         self.image_processor = image_processor
+
+    def enable_vae_tiling(self):
+        """Enable tiled VAE decoding for lower peak memory usage."""
+        self.vae.enable_tiling()
 
     def _execution_device(self):
         return self.device_

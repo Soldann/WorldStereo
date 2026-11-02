@@ -19,6 +19,8 @@ if __name__ == '__main__':
                         choices=["worldstereo-camera", "worldstereo-memory", "worldstereo-memory-dmd"],
                         help="Model type (e.g., 'worldstereo-camera', 'worldstereo-memory', 'worldstereo-memory-dmd')")
     parser.add_argument("--input_path", type=str, default="examples/images", help="image input path")
+    parser.add_argument("--scene_name", type=str, default=None,
+                        help="Process only this scene directory below input_path")
     parser.add_argument("--output_path", type=str, default="outputs", help="Target path for output results")
     parser.add_argument("--local_files_only", action="store_true", help="If True, avoid downloading the file and return the path to the local cached file if it exists.")
     parser.add_argument("--fsdp", action="store_true", help="Enable FSDP model sharding")
@@ -92,10 +94,14 @@ if __name__ == '__main__':
     rank0_log(f"Autocast dtype: {autocast_dtype if autocast_dtype else 'disabled (fp32)'}")
 
     # load data
-    if os.path.exists(f"{args.input_path}/image.png"):
+    if args.scene_name is not None:
+        scene_list = [os.path.join(args.input_path, args.scene_name)]
+        if not os.path.isdir(scene_list[0]):
+            raise FileNotFoundError(f"Scene directory does not exist: {scene_list[0]}")
+    elif os.path.exists(f"{args.input_path}/image.png"):
         scene_list = [args.input_path]
     else:
-        scene_list = glob(f"{args.input_path}/*")
+        scene_list = [path for path in glob(f"{args.input_path}/*") if os.path.isdir(path)]
     scene_list.sort()
     rank0_log(f"Building dataset. {len(scene_list)} scenes found.")
 

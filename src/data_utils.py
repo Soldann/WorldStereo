@@ -1,4 +1,5 @@
 import os.path
+from pathlib import Path
 
 from PIL import Image
 from torchvision import transforms
@@ -212,7 +213,10 @@ def load_mutli_traj_dataset(cfg, input_path, output_path, view_id, traj_id, devi
 
 
 def load_single_view_data(cfg, input_path, output_path, model_type, depth_model, device, sp_size=1, sp_rank=0):
-    pil_image = Image.open(f"{input_path}/image.png")
+    image_path = glob.glob(f"{input_path}/*.png") + glob.glob(f"{input_path}/*.jpg") + glob.glob(f"{input_path}/*.jpeg")
+    if len(image_path) == 0:
+        raise FileNotFoundError(f"No image file found in {input_path}")
+    pil_image = Image.open(image_path[0])
     origin_w, origin_h = pil_image.size
 
     height, width = assign_scale(origin_h, origin_w, scale_map=cfg.scale_map)
@@ -222,9 +226,18 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
     image = transforms.ToTensor()(pil_image) * 2 - 1
 
     # load camera
-    cam_info = json.load(open(f"{input_path}/camera.json"))
-    w2cs = torch.tensor(np.array(cam_info["extrinsic"]), dtype=torch.float32, device=device)
-    intrinsics = torch.tensor(np.array(cam_info["intrinsic"]), dtype=torch.float32, device=device)
+    camera_path = next(
+        (f"{input_path}/{name}" for name in ("camera.json", "cameras.json")
+         if os.path.isfile(f"{input_path}/{name}")),
+        None,
+    )
+    if camera_path is None:
+        raise FileNotFoundError(f"No camera.json or cameras.json found in {input_path}")
+    cam_info = json.load(open(camera_path))
+    extrinsics = cam_info["extrinsic"] if "extrinsic" in cam_info else cam_info["extrinsics"]
+    intrinsics_data = cam_info["intrinsic"] if "intrinsic" in cam_info else cam_info["intrinsics"]
+    w2cs = torch.tensor(np.array(extrinsics), dtype=torch.float32, device=device)
+    intrinsics = torch.tensor(np.array(intrinsics_data), dtype=torch.float32, device=device)
 
     if w2cs.shape[0] > cfg.nframe:
         indices = np.linspace(0, w2cs.shape[0] - 1, cfg.nframe, dtype=int)
@@ -285,7 +298,15 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
     camera_embedding = get_camera_embedding(intrinsics, w2cs, intrinsics.shape[0], height, width, normalize=True, is_w2c=True)
 
     # load text
-    prompt = json.load(open(f"{input_path}/prompt.json"))["long caption"]
+    prompt_path = next(
+        (f"{input_path}/{name}" for name in ("prompt.json", "captions.json")
+         if os.path.isfile(f"{input_path}/{name}")),
+        None,
+    )
+    if prompt_path is None:
+        raise FileNotFoundError(f"No prompt.json or captions.json found in {input_path}")
+    prompt_info = json.load(open(prompt_path))
+    prompt = prompt_info["long caption"] if "long caption" in prompt_info else prompt_info["long_caption"]
 
     meta_info = {
         "image": pil_image,
