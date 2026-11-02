@@ -213,7 +213,7 @@ def load_mutli_traj_dataset(cfg, input_path, output_path, view_id, traj_id, devi
 
 
 def load_single_view_data(cfg, input_path, output_path, model_type, depth_model, device, sp_size=1, sp_rank=0):
-    image_path = glob.glob(f"{input_path}/*.png") + glob.glob(f"{input_path}/*.jpg") + glob.glob(f"{input_path}/*.jpeg")
+    image_path = glob(f"{input_path}/*.png") + glob(f"{input_path}/*.jpg") + glob(f"{input_path}/*.jpeg")
     if len(image_path) == 0:
         raise FileNotFoundError(f"No image file found in {input_path}")
     pil_image = Image.open(image_path[0])
