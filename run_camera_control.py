@@ -12,6 +12,7 @@ from models.worldstereo_wrapper import WorldStereo
 from moge.model.v2 import MoGeModel
 from src.data_utils import load_single_view_data
 from diffusers.utils import export_to_video
+import wandb
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -30,6 +31,8 @@ if __name__ == '__main__':
                         help="Enable VAE tiling when supported by the loaded VAE")
     parser.add_argument("--seed", default=1024, type=int, help="Random seed")
     args = parser.parse_args()
+
+    wandb.init(project="worldstereo")
 
     # ── distributed setup ─────────────────────────────────────────────
     rank = int(os.getenv("RANK", 0))
@@ -105,6 +108,7 @@ if __name__ == '__main__':
     scene_list.sort()
     rank0_log(f"Building dataset. {len(scene_list)} scenes found.")
 
+    pipeline_step = 0
     for scene_path in tqdm(scene_list):
         scene_name = os.path.basename(scene_path)
         rank0_log(f"Processing scene {scene_name}.")
@@ -115,6 +119,8 @@ if __name__ == '__main__':
             meta_data = load_single_view_data(cfg=worldstereo.cfg, input_path=scene_path, output_path=output_path,
                                               model_type=args.model_type, depth_model=depth_model, device=device,
                                               sp_size=sp_size, sp_rank=sp_rank)
+            pipeline_step += 1
+            wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "data_loaded", "scene": scene_name})
 
             pipeline_kwargs = {k: v for k, v in meta_data.items() if v is not None}
             pipeline_kwargs.update(
@@ -131,11 +137,17 @@ if __name__ == '__main__':
 
             with torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_dtype is not None):
                 output = worldstereo.pipeline(**pipeline_kwargs).frames[0].float()
+            pipeline_step += 1
+            wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "inference_complete", "scene": scene_name})
             output = output.cpu().permute(0, 2, 3, 1).numpy()
             torch.cuda.empty_cache()
+            pipeline_step += 1
+            wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "postprocessing_complete", "scene": scene_name})
 
         if rank == 0:
             export_to_video(output, f"{output_path}/{args.model_type}_result.mp4", fps=16)
+        pipeline_step += 1
+        wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "video_exported", "scene": scene_name})
 
 
     if dist.is_initialized():
