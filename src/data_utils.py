@@ -14,7 +14,7 @@ from glob import glob
 from src.pointcloud import get_points3d_and_colors, multi_gpu_point_rendering
 from diffusers.utils import export_to_video
 import torch.distributed as dist
-
+import wandb
 
 def assign_scale(h, w, scale_map=None):
     if scale_map is None:
@@ -212,7 +212,7 @@ def load_mutli_traj_dataset(cfg, input_path, output_path, view_id, traj_id, devi
     return meta
 
 
-def load_single_view_data(cfg, input_path, output_path, model_type, depth_model, device, sp_size=1, sp_rank=0):
+def load_single_view_data(cfg, input_path, output_path, model_type, depth_model, device, sp_size=1, sp_rank=0, pipeline_step=0, bypass_depth_and_initial_frame=False):
     image_path = glob(f"{input_path}/*.png") + glob(f"{input_path}/*.jpg") + glob(f"{input_path}/*.jpeg")
     if len(image_path) == 0:
         raise FileNotFoundError(f"No image file found in {input_path}")
@@ -249,15 +249,21 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
     intrinsics[:, 0, :] = intrinsics[:, 0, :] / origin_w * width
     intrinsics[:, 1, :] = intrinsics[:, 1, :] / origin_h * height
 
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "cameras_loaded"})
+
     # load conditions
     # predict depth via moge
-    depth_pred = depth_model.infer(transforms.ToTensor()(pil_image)[None].to(device))
-    depth_mask = depth_pred["mask"][0]
-    depth = depth_pred["depth"][0].clone()
-    depth[~depth_mask] = 0
+    if bypass_depth_and_initial_frame:
+        points_3d, points_color = np.load(f"{input_path}/points.npy")
+    else:
+        depth_pred = depth_model.infer(transforms.ToTensor()(pil_image)[None].to(device))
+        depth_mask = depth_pred["mask"][0]
+        depth = depth_pred["depth"][0].clone()
+        depth[~depth_mask] = 0
 
-    points_3d, points_color = get_points3d_and_colors(K=intrinsics, w2cs=w2cs, depth=depth[None, None],
-                                                      image=image[None], device=device, mask=~depth_mask)
+        points_3d, points_color = get_points3d_and_colors(K=intrinsics, w2cs=w2cs, depth=depth[None, None],
+                                                        image=image[None], device=device, mask=~depth_mask)
     pcd_renders, pcd_mask = multi_gpu_point_rendering(image=pil_image, Ks=intrinsics, w2cs=w2cs,
                                                       render_points=points_3d,
                                                       render_colors=points_color,  # [-1~1]
@@ -266,6 +272,8 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
                                                       render_radius=0.008, points_per_pixel=20,
                                                       slice_size=4, local_rank=sp_rank, replace_first_frame=True)
 
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "depth_computed"})
     render_video = []
     mask_video = []
     pcd_renders = pcd_renders.to(torch.float32)
@@ -281,11 +289,14 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
 
     dist.barrier()
 
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "pcd_video_rendered"})
     render_frames = load_video(f"{output_path}/render.mp4")
     render_video = torch.stack([transforms.ToTensor()(frame) for frame in render_frames], dim=0) * 2 - 1.0  # [f,c,h,w]
     render_video = F.interpolate(render_video, size=(height, width), mode='bicubic')[None]
     # replace the first frame with the high-quality reference image
-    render_video[0, 0] = image
+    if not bypass_depth_and_initial_frame:
+        render_video[0, 0] = image
     render_video = torch.clip(render_video, -1, 1)  # [-1~1], [1,f,c,h,w]
     render_mask_frames = load_video(f"{output_path}/render_mask.mp4")
     render_mask = torch.stack([transforms.ToTensor()(frame) for frame in render_mask_frames], dim=0)[:, 0:1]  # [f,1,h,w]
@@ -341,4 +352,4 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
         meta_info["reference_video"] = einops.rearrange(reference_video[None], "b f c h w -> b c f h w")
         meta_info["ref_index"] = torch.tensor([0], device=device, dtype=torch.long)
 
-    return meta_info
+    return meta_info, pipeline_step

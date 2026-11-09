@@ -29,10 +29,15 @@ if __name__ == '__main__':
                         help="Load pipeline components on demand to reduce GPU memory use")
     parser.add_argument("--vae_tiling", action="store_true",
                         help="Enable VAE tiling when supported by the loaded VAE")
+    parser.add_argument("--bypass-depth-and-initial-frame", action="store_true", help="Bypass deptha and using input image as first frame, for satellite input")
     parser.add_argument("--seed", default=1024, type=int, help="Random seed")
     args = parser.parse_args()
 
     wandb.init(project="worldstereo")
+    pipeline_step = 0
+
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "starting"})
 
     # ── distributed setup ─────────────────────────────────────────────
     rank = int(os.getenv("RANK", 0))
@@ -80,8 +85,13 @@ if __name__ == '__main__':
         vae_tiling=args.vae_tiling,
     )
 
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "worldstereo_loaded"})
     # moge is used for warp rendering
     depth_model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl-normal").to(device).eval()
+
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "moge_loaded"})
 
     # ── inference ──────────────────────────────────────────────────────
     dist.barrier()
@@ -108,7 +118,6 @@ if __name__ == '__main__':
     scene_list.sort()
     rank0_log(f"Building dataset. {len(scene_list)} scenes found.")
 
-    pipeline_step = 0
     for scene_path in tqdm(scene_list):
         scene_name = os.path.basename(scene_path)
         rank0_log(f"Processing scene {scene_name}.")
@@ -116,9 +125,10 @@ if __name__ == '__main__':
         if rank == 0:
             os.makedirs(output_path, exist_ok=True)
         with torch.no_grad():
-            meta_data = load_single_view_data(cfg=worldstereo.cfg, input_path=scene_path, output_path=output_path,
+            wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "dataset_load_start", "scene": scene_name})
+            meta_data, pipeline_step = load_single_view_data(cfg=worldstereo.cfg, input_path=scene_path, output_path=output_path,
                                               model_type=args.model_type, depth_model=depth_model, device=device,
-                                              sp_size=sp_size, sp_rank=sp_rank)
+                                              sp_size=sp_size, sp_rank=sp_rank, pipeline_step=pipeline_step, bypass_depth_and_initial_frame=args.bypass_depth_and_initial_frame)
             pipeline_step += 1
             wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "data_loaded", "scene": scene_name})
 
