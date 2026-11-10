@@ -270,7 +270,7 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
                                                       image_h=height, image_w=width,
                                                       device=device, device_num=sp_size,
                                                       render_radius=0.008, points_per_pixel=20,
-                                                      slice_size=4, local_rank=sp_rank, replace_first_frame=True)
+                                                      slice_size=4, local_rank=sp_rank, replace_first_frame=(False if bypass_depth_and_initial_frame else True))
 
     pipeline_step += 1
     wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "depth_computed"})
