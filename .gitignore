@@ -6,3 +6,7 @@ __pycache__/
 ./third_party
 .codebuddy
 .CLAUDE.md
+outputs/
+wandb/
+output*.log
+error*.log
