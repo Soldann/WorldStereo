@@ -353,3 +353,78 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
         meta_info["ref_index"] = torch.tensor([0], device=device, dtype=torch.long)
 
     return meta_info, pipeline_step
+
+def test_pcd_render(cfg, input_path, output_path, model_type, depth_model, device, sp_size=1, sp_rank=0, pipeline_step=0, bypass_depth_and_initial_frame=False):
+    image_path = glob(f"{input_path}/*.png") + glob(f"{input_path}/*.jpg") + glob(f"{input_path}/*.jpeg")
+    if len(image_path) == 0:
+        raise FileNotFoundError(f"No image file found in {input_path}")
+    pil_image = Image.open(image_path[0])
+    origin_w, origin_h = pil_image.size
+
+    height, width = assign_scale(origin_h, origin_w, scale_map=cfg["scale_map"])
+
+    rank0_log(f"Resized image to {height}x{width}")
+    pil_image = pil_image.resize((width, height), Image.Resampling.BICUBIC)
+    image = transforms.ToTensor()(pil_image) * 2 - 1
+
+    # load camera
+    camera_path = next(
+        (f"{input_path}/{name}" for name in ("camera.json", "cameras.json")
+         if os.path.isfile(f"{input_path}/{name}")),
+        None,
+    )
+    if camera_path is None:
+        raise FileNotFoundError(f"No camera.json or cameras.json found in {input_path}")
+    cam_info = json.load(open(camera_path))
+    extrinsics = cam_info["extrinsic"] if "extrinsic" in cam_info else cam_info["extrinsics"]
+    intrinsics_data = cam_info["intrinsic"] if "intrinsic" in cam_info else cam_info["intrinsics"]
+    w2cs = torch.tensor(np.array(extrinsics), dtype=torch.float32, device=device)
+    intrinsics = torch.tensor(np.array(intrinsics_data), dtype=torch.float32, device=device)
+
+    if w2cs.shape[0] > cfg["nframe"]:
+        indices = np.linspace(0, w2cs.shape[0] - 1, cfg["nframe"], dtype=int)
+        w2cs = w2cs[indices]
+    if intrinsics.shape[0] > cfg["nframe"]:
+        indices = np.linspace(0, intrinsics.shape[0] - 1, cfg["nframe"], dtype=int)
+        intrinsics = intrinsics[indices]
+
+    intrinsics[:, 0, :] = intrinsics[:, 0, :] / origin_w * width
+    intrinsics[:, 1, :] = intrinsics[:, 1, :] / origin_h * height
+
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "cameras_loaded"})
+
+    # load conditions
+    # predict depth via moge
+    if bypass_depth_and_initial_frame:
+        points_3d, points_color = np.load(f"{input_path}/points.npy")
+    else:
+        depth_pred = depth_model.infer(transforms.ToTensor()(pil_image)[None].to(device))
+        depth_mask = depth_pred["mask"][0]
+        depth = depth_pred["depth"][0].clone()
+        depth[~depth_mask] = 0
+
+        points_3d, points_color = get_points3d_and_colors(K=intrinsics, w2cs=w2cs, depth=depth[None, None],
+                                                        image=image[None], device=device, mask=~depth_mask)
+    pcd_renders, pcd_mask = multi_gpu_point_rendering(image=pil_image, Ks=intrinsics, w2cs=w2cs,
+                                                      render_points=points_3d,
+                                                      render_colors=points_color,  # [-1~1]
+                                                      image_h=height, image_w=width,
+                                                      device=device, device_num=sp_size,
+                                                      render_radius=0.008, points_per_pixel=20,
+                                                      slice_size=4, local_rank=sp_rank, replace_first_frame=True)
+
+    pipeline_step += 1
+    wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "depth_computed"})
+    render_video = []
+    mask_video = []
+    pcd_renders = pcd_renders.to(torch.float32)
+    for j in range(pcd_renders.shape[0]):
+        img = transforms.ToPILImage()((pcd_renders[j] + 1) / 2)
+        render_video.append(img)
+        mask = transforms.ToPILImage()(pcd_mask[j])
+        mask_video.append(mask)
+
+    if sp_rank == 0:
+        export_to_video(render_video, f"{output_path}/render.mp4", fps=16)
+        export_to_video(mask_video, f"{output_path}/render_mask.mp4", fps=16)
