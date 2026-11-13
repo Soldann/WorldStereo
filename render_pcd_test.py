@@ -83,7 +83,7 @@ if __name__ == '__main__':
         #     sequential_cpu_offload=args.sequential_cpu_offload,
         #     vae_tiling=args.vae_tiling,
         # )
-    config = json.load(open(f"/home/landson/.cache/huggingface/hub/models--hanshanxue--WorldStereo/snapshots/ac2ad97ecb043fe80c2f19cd1898006becb9d66e/{args.model_type}/config.json", "r"))
+    config = json.load(open(f"/home/languo/.cache/huggingface/hub/models--hanshanxue--WorldStereo/snapshots/ac2ad97ecb043fe80c2f19cd1898006becb9d66e/{args.model_type}/config.json", "r"))
 
     pipeline_step += 1
     wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "worldstereo_loaded"})

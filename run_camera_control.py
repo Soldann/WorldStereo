@@ -29,7 +29,8 @@ if __name__ == '__main__':
                         help="Load pipeline components on demand to reduce GPU memory use")
     parser.add_argument("--vae_tiling", action="store_true",
                         help="Enable VAE tiling when supported by the loaded VAE")
-    parser.add_argument("--bypass-depth-and-initial-frame", action="store_true", help="Bypass deptha and using input image as first frame, for satellite input")
+    parser.add_argument("--bypass-depth-and-initial-frame", action="store_true", help="Bypass depth and generate only with pcd, for satellite input")
+    parser.add_argument("--bypass-depth-only", action="store_true", help="Bypass depth but keep image for use with image data")
     parser.add_argument("--seed", default=1024, type=int, help="Random seed")
     args = parser.parse_args()
 
@@ -128,7 +129,7 @@ if __name__ == '__main__':
             wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "dataset_load_start", "scene": scene_name})
             meta_data, pipeline_step = load_single_view_data(cfg=worldstereo.cfg, input_path=scene_path, output_path=output_path,
                                               model_type=args.model_type, depth_model=depth_model, device=device,
-                                              sp_size=sp_size, sp_rank=sp_rank, pipeline_step=pipeline_step, bypass_depth_and_initial_frame=args.bypass_depth_and_initial_frame)
+                                              sp_size=sp_size, sp_rank=sp_rank, pipeline_step=pipeline_step, bypass_depth_and_initial_frame=args.bypass_depth_and_initial_frame, bypass_depth_only=args.bypass_depth_only)
             pipeline_step += 1
             wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "data_loaded", "scene": scene_name})
 

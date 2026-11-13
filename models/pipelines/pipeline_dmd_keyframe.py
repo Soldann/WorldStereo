@@ -377,16 +377,16 @@ class RefKFDMDGeneratorPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         elif latent_cond_mode == "first_frame_only":
             # Only encode first frame, then concatenate zeros in latent space
             # Explicitly cast to VAE weight dtype to avoid input/bias dtype mismatch under autocast
-            # first_frame = image.to(device=device, dtype=self.vae.dtype)  # [b, c, 1, h, w]
-            # first_frame_latent = retrieve_latents(self.vae.encode(first_frame), sample_mode="argmax")
-            # first_frame_latent = first_frame_latent.repeat(batch_size, 1, 1, 1, 1)
-            # first_frame_latent = (first_frame_latent - latents_mean) * latents_std
+            first_frame = image.to(device=device, dtype=self.vae.dtype)  # [b, c, 1, h, w]
+            first_frame_latent = retrieve_latents(self.vae.encode(first_frame), sample_mode="argmax")
+            first_frame_latent = first_frame_latent.repeat(batch_size, 1, 1, 1, 1)
+            first_frame_latent = (first_frame_latent - latents_mean) * latents_std
             # Concatenate zeros in latent space for remaining frames
             zero_image = image.new_zeros(image.shape[0], image.shape[1], 1, height, width).to(device=device, dtype=self.vae.dtype)
             zero_latents = retrieve_latents(self.vae.encode(zero_image), sample_mode="argmax")
-            zero_latents = zero_latents.repeat(batch_size, 1, num_latent_frames, 1, 1)
+            zero_latents = zero_latents.repeat(batch_size, 1, num_latent_frames - 1, 1, 1)
             zero_latents = (zero_latents - latents_mean) * latents_std
-            latent_condition = torch.cat([zero_latents], dim=2)
+            latent_condition = torch.cat([first_frame_latent, zero_latents], dim=2)
         else:
             raise NotImplementedError(f"latent_cond_mode {latent_cond_mode} not implemented")
 

@@ -212,7 +212,7 @@ def load_mutli_traj_dataset(cfg, input_path, output_path, view_id, traj_id, devi
     return meta
 
 
-def load_single_view_data(cfg, input_path, output_path, model_type, depth_model, device, sp_size=1, sp_rank=0, pipeline_step=0, bypass_depth_and_initial_frame=False):
+def load_single_view_data(cfg, input_path, output_path, model_type, depth_model, device, sp_size=1, sp_rank=0, pipeline_step=0, bypass_depth_and_initial_frame=False, bypass_depth_only=False):
     image_path = glob(f"{input_path}/*.png") + glob(f"{input_path}/*.jpg") + glob(f"{input_path}/*.jpeg")
     if len(image_path) == 0:
         raise FileNotFoundError(f"No image file found in {input_path}")
@@ -254,7 +254,7 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
 
     # load conditions
     # predict depth via moge
-    if bypass_depth_and_initial_frame:
+    if bypass_depth_and_initial_frame or bypass_depth_only:
         points_3d, points_color = np.load(f"{input_path}/points.npy")
     else:
         depth_pred = depth_model.infer(transforms.ToTensor()(pil_image)[None].to(device))
@@ -296,6 +296,7 @@ def load_single_view_data(cfg, input_path, output_path, model_type, depth_model,
     render_video = F.interpolate(render_video, size=(height, width), mode='bicubic')[None]
     # replace the first frame with the high-quality reference image
     if not bypass_depth_and_initial_frame:
+        print("Replacing the first frame of the rendered video with the high-quality reference image.")
         render_video[0, 0] = image
     render_video = torch.clip(render_video, -1, 1)  # [-1~1], [1,f,c,h,w]
     render_mask_frames = load_video(f"{output_path}/render_mask.mp4")
@@ -412,7 +413,7 @@ def test_pcd_render(cfg, input_path, output_path, model_type, depth_model, devic
                                                       image_h=height, image_w=width,
                                                       device=device, device_num=sp_size,
                                                       render_radius=0.008, points_per_pixel=20,
-                                                      slice_size=4, local_rank=sp_rank, replace_first_frame=True)
+                                                      slice_size=4, local_rank=sp_rank, replace_first_frame=(False if bypass_depth_and_initial_frame else True))
 
     pipeline_step += 1
     wandb.log({"pipeline_step": pipeline_step, "pipeline_stage": "depth_computed"})
